@@ -738,6 +738,41 @@ final class UserAuthenticationStateMachineTests: XCTestCase {
         stateMachine.sendUserAuthFailure(.init(authentications: NIOSSHAvailableUserAuthenticationMethods.all.strings, partialSuccess: false))
     }
 
+    func testServerRejectsRSACompatibleRequestsWithMismatchedSignatureAlgorithm() throws {
+        NIOSSHAlgorithms.register(publicKey: RSASHA2TestPublicKey.self, signature: RSASHA2TestSignature.self)
+        NIOSSHAlgorithms.register(publicKey: RSASHA2TestPublicKey.self, signature: LegacyRSATestSignature.self)
+        defer { NIOSSHAlgorithms.unregisterAlgorithms() }
+
+        var stateMachine = UserAuthenticationStateMachine(role: .server(.init(hostKeys: [self.hostKey], userAuthDelegate: DenyThenAcceptDelegate(messagesToDeny: 0))), loop: self.loop, sessionID: self.sessionID)
+
+        let serviceAccept = SSHMessage.ServiceAcceptMessage(service: "ssh-userauth")
+        XCTAssertNoThrow(try self.serviceRequested(service: "ssh-userauth", nextMessage: serviceAccept, stateMachine: &stateMachine))
+        stateMachine.sendServiceAccept(serviceAccept)
+
+        let publicKey = NIOSSHPublicKey(backingKey: .custom(RSASHA2TestPublicKey()))
+        let payload = UserAuthSignablePayload(
+            sessionIdentifier: self.sessionID,
+            userName: "foo",
+            serviceName: "ssh-connection",
+            publicKey: publicKey,
+            publicKeyAlgorithm: "rsa-sha2-512".utf8
+        )
+        let signature = NIOSSHSignature(
+            backingSignature: .custom(LegacyRSATestSignature(rawRepresentation: Data(payload.bytes.readableBytesView)))
+        )
+        let request = SSHMessage.UserAuthRequestMessage(
+            username: "foo",
+            service: "ssh-connection",
+            publicKeyAlgorithm: "rsa-sha2-512",
+            method: .publicKey(.known(key: publicKey, signature: signature))
+        )
+
+        try self.expectAuthRequestToFailSynchronously(request: request,
+                                                      expecting: .init(authentications: NIOSSHAvailableUserAuthenticationMethods.all.strings, partialSuccess: false),
+                                                      stateMachine: &stateMachine)
+        stateMachine.sendUserAuthFailure(.init(authentications: NIOSSHAvailableUserAuthenticationMethods.all.strings, partialSuccess: false))
+    }
+
     func testPrivateKeyClientAuthFlow() throws {
         let delegate = InfinitePrivateKeyDelegate()
         var stateMachine = UserAuthenticationStateMachine(role: .client(.init(userAuthDelegate: delegate, serverAuthDelegate: AcceptAllHostKeysDelegate())), loop: self.loop, sessionID: self.sessionID)

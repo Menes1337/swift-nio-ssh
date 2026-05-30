@@ -406,8 +406,19 @@ private extension UserAuthenticationStateMachine {
 
         case .publicKey(.known(key: let key, signature: .some(let signature))):
             // This is a direct request to auth, just pass it through.
-            let dataToSign = UserAuthSignablePayload(sessionIdentifier: sessionID, userName: request.username, serviceName: request.service, publicKey: key)
+            let dataToSign = UserAuthSignablePayload(
+                sessionIdentifier: sessionID,
+                userName: request.username,
+                serviceName: request.service,
+                publicKey: key,
+                publicKeyAlgorithm: request.publicKeyAlgorithm?.utf8 ?? key.keyPrefix
+            )
             let supportedMethods = delegate.supportedAuthenticationMethods
+
+            let publicKeyAlgorithm = request.publicKeyAlgorithm?.utf8 ?? key.keyPrefix
+            guard signature.signaturePrefix.elementsEqual(publicKeyAlgorithm) else {
+                return self.loop.makeSucceededFuture(.failure(.init(authentications: supportedMethods.strings, partialSuccess: false)))
+            }
 
             guard key.isValidSignature(signature, for: dataToSign) else {
                 // Whoops, signature not valid.
@@ -426,7 +437,7 @@ private extension UserAuthenticationStateMachine {
         case .publicKey(.known(key: let key, signature: .none)):
             // This is a weird wrinkle in public key auth: it's a request to ask whether a given key is valid, but not to validate that key itself.
             // For now we do a shortcut: we just say that all keys are acceptable, rather than ask the delegate.
-            return self.loop.makeSucceededFuture(.publicKeyOK(.init(key: key)))
+            return self.loop.makeSucceededFuture(.publicKeyOK(.init(publicKeyAlgorithm: request.publicKeyAlgorithm, key: key)))
 
         case .publicKey(.unknown):
             // We don't known the algorithm, the auth attempt has failed.

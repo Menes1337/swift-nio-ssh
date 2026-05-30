@@ -82,6 +82,11 @@ public protocol NIOSSHPrivateKeyProtocol {
     func signature<D: DataProtocol>(for data: D) throws -> NIOSSHSignatureProtocol
 }
 
+public protocol NIOSSHAlgorithmSpecificPrivateKeyProtocol: NIOSSHPrivateKeyProtocol {
+    /// Creates a signature using the requested SSH signature algorithm.
+    func signature<D: DataProtocol>(for data: D, algorithm: String) throws -> NIOSSHSignatureProtocol
+}
+
 internal extension NIOSSHPrivateKeyProtocol {
     var keyPrefix: String {
         Self.keyPrefix

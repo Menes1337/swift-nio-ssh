@@ -248,6 +248,10 @@ public enum NIOSSHAlgorithms {
         _CustomAlgorithms.publicKeyAlgorithmsLock.withLockVoid {
             if !_CustomAlgorithms.publicKeyAlgorithms.contains(where: { ObjectIdentifier($0) == ObjectIdentifier(type) }) {
                 _CustomAlgorithms.publicKeyAlgorithms.append(type)
+            }
+        }
+        _CustomAlgorithms.signaturesLock.withLockVoid {
+            if !_CustomAlgorithms.signatures.contains(where: { ObjectIdentifier($0) == ObjectIdentifier(signature) }) {
                 _CustomAlgorithms.signatures.append(signature)
             }
         }

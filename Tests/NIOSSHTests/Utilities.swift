@@ -31,6 +31,71 @@ func assertNoThrowWithValue<T>(_ body: @autoclosure () throws -> T, defaultValue
     }
 }
 
+struct RSASHA2TestPublicKey: NIOSSHPublicKeyProtocol {
+    static let publicKeyPrefix = "ssh-rsa"
+
+    let rawRepresentation: Data
+
+    init(rawRepresentation: Data = Data([1, 2, 3])) {
+        self.rawRepresentation = rawRepresentation
+    }
+
+    func isValidSignature<D: DataProtocol>(_ signature: NIOSSHSignatureProtocol, for data: D) -> Bool {
+        signature.rawRepresentation == Data(data)
+    }
+
+    func write(to buffer: inout ByteBuffer) -> Int {
+        buffer.writeSSHString(rawRepresentation)
+    }
+
+    static func read(from buffer: inout ByteBuffer) throws -> RSASHA2TestPublicKey {
+        guard let length = buffer.readInteger(as: UInt32.self),
+              let bytes = buffer.readBytes(length: Int(length)) else {
+            throw NIOSSHError.invalidSSHMessage(reason: "invalid RSA-SHA2 test key")
+        }
+
+        return RSASHA2TestPublicKey(rawRepresentation: Data(bytes))
+    }
+}
+
+struct RSASHA2TestSignature: NIOSSHSignatureProtocol {
+    static let signaturePrefix = "rsa-sha2-512"
+
+    let rawRepresentation: Data
+
+    func write(to buffer: inout ByteBuffer) -> Int {
+        buffer.writeSSHString(rawRepresentation)
+    }
+
+    static func read(from buffer: inout ByteBuffer) throws -> RSASHA2TestSignature {
+        guard let length = buffer.readInteger(as: UInt32.self),
+              let bytes = buffer.readBytes(length: Int(length)) else {
+            throw NIOSSHError.invalidSSHMessage(reason: "invalid RSA-SHA2 test signature")
+        }
+
+        return RSASHA2TestSignature(rawRepresentation: Data(bytes))
+    }
+}
+
+struct LegacyRSATestSignature: NIOSSHSignatureProtocol {
+    static let signaturePrefix = "ssh-rsa"
+
+    let rawRepresentation: Data
+
+    func write(to buffer: inout ByteBuffer) -> Int {
+        buffer.writeSSHString(rawRepresentation)
+    }
+
+    static func read(from buffer: inout ByteBuffer) throws -> LegacyRSATestSignature {
+        guard let length = buffer.readInteger(as: UInt32.self),
+              let bytes = buffer.readBytes(length: Int(length)) else {
+            throw NIOSSHError.invalidSSHMessage(reason: "invalid legacy RSA test signature")
+        }
+
+        return LegacyRSATestSignature(rawRepresentation: Data(bytes))
+    }
+}
+
 extension SSHKeyExchangeStateMachine {
     mutating func handle(keyExchangeInit message: SSHMessage.KeyExchangeECDHInitMessage) throws -> SSHMultiMessage? {
         try self.handle(keyExchangeInit: message.publicKey)

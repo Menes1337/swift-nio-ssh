@@ -33,6 +33,22 @@ internal struct UserAuthSignablePayload {
     private(set) var bytes: ByteBuffer
 
     init(sessionIdentifier: ByteBuffer, userName: String, serviceName: String, publicKey: NIOSSHPublicKey) {
+        self.init(
+            sessionIdentifier: sessionIdentifier,
+            userName: userName,
+            serviceName: serviceName,
+            publicKey: publicKey,
+            publicKeyAlgorithm: publicKey.keyPrefix
+        )
+    }
+
+    init<Algorithm: Collection>(
+        sessionIdentifier: ByteBuffer,
+        userName: String,
+        serviceName: String,
+        publicKey: NIOSSHPublicKey,
+        publicKeyAlgorithm: Algorithm
+    ) where Algorithm.Element == UInt8 {
         // We use the session identifier as the base buffer and just append to it. We ask for 1kB because it's likely
         // enough for this data.
         var sessionIdentifier = sessionIdentifier
@@ -45,7 +61,7 @@ internal struct UserAuthSignablePayload {
         newBuffer.writeSSHString(serviceName.utf8)
         newBuffer.writeSSHString("publickey".utf8)
         newBuffer.writeSSHBoolean(true)
-        newBuffer.writeSSHString(publicKey.keyPrefix)
+        newBuffer.writeSSHString(publicKeyAlgorithm)
         newBuffer.writeCompositeSSHString { buffer in
             buffer.writeSSHHostKey(publicKey)
         }

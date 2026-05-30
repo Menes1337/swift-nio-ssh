@@ -241,6 +241,23 @@ final class SSHMessagesTests: XCTestCase {
         }
     }
 
+    func testUserAuthRequestWithRSASHA2AndNonRSAKeyFails() throws {
+        var buffer = ByteBufferAllocator().buffer(capacity: 1024)
+        let key = NIOSSHPrivateKey(ed25519Key: .init())
+        let message = SSHMessage.userAuthRequest(.init(
+            username: "test",
+            service: "ssh-connection",
+            publicKeyAlgorithm: "rsa-sha2-512",
+            method: .publicKey(.known(key: key.publicKey, signature: nil))
+        ))
+
+        buffer.writeSSHMessage(message)
+
+        XCTAssertThrowsError(try buffer.readSSHMessage()) { error in
+            XCTAssertEqual((error as? NIOSSHError)?.type, .invalidSSHMessage)
+        }
+    }
+
     func testUserAuthRequestToleratesUnsupportedPublicKeyAlgorithms() throws {
         // This test ensures that userAuthRequest will tolerate an unsupported public key algorithm.
         let message: [UInt8] = [
@@ -329,6 +346,20 @@ final class SSHMessagesTests: XCTestCase {
         try self.assertCorrectlyManagesPartialRead(message)
     }
 
+    func testUserAuthPKOKRSACompatibleSHA2Algorithm() throws {
+        NIOSSHAlgorithms.register(publicKey: RSASHA2TestPublicKey.self, signature: RSASHA2TestSignature.self)
+        defer { NIOSSHAlgorithms.unregisterAlgorithms() }
+
+        var buffer = ByteBufferAllocator().buffer(capacity: 1024)
+        let key = NIOSSHPublicKey(backingKey: .custom(RSASHA2TestPublicKey()))
+        let message = SSHMessage.userAuthPKOK(.init(publicKeyAlgorithm: "rsa-sha2-512", key: key))
+
+        buffer.writeSSHMessage(message)
+        XCTAssertEqual(try buffer.readSSHMessage(), message)
+
+        try self.assertCorrectlyManagesPartialRead(message)
+    }
+
     func testUserAuthPKOKWithMismatchedKeyAndAlgorithm() throws {
         // This is a SSHMessage.userAuthPKOK that has been tweaked to have an ed25519 key claiming to be a P256 key.
         let message: [UInt8] = [
@@ -346,6 +377,18 @@ final class SSHMessagesTests: XCTestCase {
 
         var buffer = ByteBufferAllocator().buffer(capacity: 100)
         buffer.writeBytes(message)
+
+        XCTAssertThrowsError(try buffer.readSSHMessage()) { error in
+            XCTAssertEqual((error as? NIOSSHError)?.type, .invalidSSHMessage)
+        }
+    }
+
+    func testUserAuthPKOKWithRSASHA2AndNonRSAKeyFails() throws {
+        var buffer = ByteBufferAllocator().buffer(capacity: 1024)
+        let key = NIOSSHPrivateKey(ed25519Key: .init())
+        let message = SSHMessage.userAuthPKOK(.init(publicKeyAlgorithm: "rsa-sha2-512", key: key.publicKey))
+
+        buffer.writeSSHMessage(message)
 
         XCTAssertThrowsError(try buffer.readSSHMessage()) { error in
             XCTAssertEqual((error as? NIOSSHError)?.type, .invalidSSHMessage)

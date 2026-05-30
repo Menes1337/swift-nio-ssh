@@ -14,6 +14,27 @@
 
 import NIOCore
 
+private let rsaPublicKeyAlgorithm = Array("ssh-rsa".utf8)
+private let rsaSHA256PublicKeyAlgorithm = Array("rsa-sha2-256".utf8)
+private let rsaSHA512PublicKeyAlgorithm = Array("rsa-sha2-512".utf8)
+
+private extension Collection where Element == UInt8 {
+    var isRSASHA2PublicKeyAlgorithm: Bool {
+        self.elementsEqual(rsaSHA256PublicKeyAlgorithm) ||
+            self.elementsEqual(rsaSHA512PublicKeyAlgorithm)
+    }
+
+    var isKnownPublicKeyAlgorithm: Bool {
+        self.isRSASHA2PublicKeyAlgorithm ||
+            NIOSSHPublicKey.knownAlgorithms.contains { $0.elementsEqual(self) }
+    }
+
+    func isRSASHA2AlgorithmForRSAPublicKey(_ publicKeyAlgorithm: String.UTF8View) -> Bool {
+        publicKeyAlgorithm.elementsEqual(rsaPublicKeyAlgorithm) &&
+            self.isRSASHA2PublicKeyAlgorithm
+    }
+}
+
 // MARK: - Types
 
 enum SSHMessage: Equatable {
@@ -155,6 +176,7 @@ extension SSHMessage {
 
         var username: String
         var service: String
+        var publicKeyAlgorithm: String? = nil
         var method: Method
     }
 
@@ -185,6 +207,7 @@ extension SSHMessage {
         // SSH_MSG_USERAUTH_PK_OK
         static let id: UInt8 = 60
 
+        var publicKeyAlgorithm: String? = nil
         var key: NIOSSHPublicKey
     }
 
@@ -664,6 +687,7 @@ extension ByteBuffer {
             }
 
             let method: SSHMessage.UserAuthRequestMessage.Method
+            var publicKeyAlgorithm: String?
             switch methodRawValue {
             case "none":
                 method = .none
@@ -685,26 +709,40 @@ extension ByteBuffer {
                     return nil
                 }
 
-                if NIOSSHPublicKey.knownAlgorithms.contains(where: { $0.elementsEqual(algorithmName.readableBytesView) }) {
-                    // This is a known algorithm, we can load the key.
-                    guard let publicKey = try keyBytes.readSSHHostKey() else {
+                if let publicKey = try keyBytes.readSSHHostKey() {
+                    let outerAlgorithmMatchesKey = algorithmName.readableBytesView.elementsEqual(publicKey.keyPrefix) ||
+                        algorithmName.readableBytesView.isRSASHA2AlgorithmForRSAPublicKey(publicKey.keyPrefix)
+
+                    if outerAlgorithmMatchesKey {
+                        if !algorithmName.readableBytesView.elementsEqual(publicKey.keyPrefix) {
+                            publicKeyAlgorithm = String(decoding: algorithmName.readableBytesView, as: UTF8.self)
+                        }
+
+                        if expectSignature {
+                            guard var signatureBytes = self.readSSHString(), let signature = try signatureBytes.readSSHSignature() else {
+                                return nil
+                            }
+
+                            method = .publicKey(.known(key: publicKey, signature: signature))
+                        } else {
+                            method = .publicKey(.known(key: publicKey, signature: nil))
+                        }
+                    } else if algorithmName.readableBytesView.isKnownPublicKeyAlgorithm {
+                        throw NIOSSHError.invalidSSHMessage(reason: "algorithm and key mismatch in user auth request")
+                    } else {
+                        if expectSignature {
+                            guard let _ = self.readSSHString() else {
+                                return nil
+                            }
+                        }
+
+                        method = .publicKey(.unknown)
+                    }
+                } else {
+                    guard !algorithmName.readableBytesView.isKnownPublicKeyAlgorithm else {
                         return nil
                     }
 
-                    guard algorithmName.readableBytesView.elementsEqual(publicKey.keyPrefix) else {
-                        throw NIOSSHError.invalidSSHMessage(reason: "algorithm and key mismatch in user auth request")
-                    }
-
-                    if expectSignature {
-                        guard var signatureBytes = self.readSSHString(), let signature = try signatureBytes.readSSHSignature() else {
-                            return nil
-                        }
-
-                        method = .publicKey(.known(key: publicKey, signature: signature))
-                    } else {
-                        method = .publicKey(.known(key: publicKey, signature: nil))
-                    }
-                } else {
                     // This is not an algorithm we know. Consume the signature if we're expecting it.
                     if expectSignature {
                         guard let _ = self.readSSHString() else {
@@ -718,7 +756,12 @@ extension ByteBuffer {
                 return nil
             }
 
-            return SSHMessage.UserAuthRequestMessage(username: username, service: service, method: method)
+            return SSHMessage.UserAuthRequestMessage(
+                username: username,
+                service: service,
+                publicKeyAlgorithm: publicKeyAlgorithm,
+                method: method
+            )
         }
     }
 
@@ -756,7 +799,7 @@ extension ByteBuffer {
                 return nil
             }
 
-            guard NIOSSHPublicKey.knownAlgorithms.contains(where: { $0.elementsEqual(publicKeyType.readableBytesView) }) else {
+            guard publicKeyType.readableBytesView.isKnownPublicKeyAlgorithm else {
                 throw NIOSSHError.invalidSSHMessage(reason: "unsupported key type in PK_OK")
             }
 
@@ -764,12 +807,18 @@ extension ByteBuffer {
                 return nil
             }
 
-            // Validate consistency here.
-            guard publicKeyType.readableBytesView.elementsEqual(publicKey.keyPrefix) else {
+            // Validate consistency here. RSA-SHA2 userauth algorithms use an
+            // ssh-rsa key blob, as defined by RFC 8332.
+            guard publicKeyType.readableBytesView.elementsEqual(publicKey.keyPrefix) ||
+                publicKeyType.readableBytesView.isRSASHA2AlgorithmForRSAPublicKey(publicKey.keyPrefix)
+            else {
                 throw NIOSSHError.invalidSSHMessage(reason: "inconsistent key type")
             }
 
-            return .init(key: publicKey)
+            let publicKeyAlgorithm = publicKeyType.readableBytesView.elementsEqual(publicKey.keyPrefix)
+                ? nil
+                : String(decoding: publicKeyType.readableBytesView, as: UTF8.self)
+            return .init(publicKeyAlgorithm: publicKeyAlgorithm, key: publicKey)
         }
     }
 
@@ -1304,7 +1353,7 @@ extension ByteBuffer {
         case .publicKey(.known(key: let key, signature: let signature)):
             writtenBytes += self.writeSSHString("publickey".utf8)
             writtenBytes += self.writeSSHBoolean(signature != nil)
-            writtenBytes += self.writeSSHString(key.keyPrefix)
+            writtenBytes += self.writeSSHString(message.publicKeyAlgorithm?.utf8 ?? key.keyPrefix)
             writtenBytes += self.writeCompositeSSHString { buffer in
                 buffer.writeSSHHostKey(key)
             }
@@ -1338,7 +1387,7 @@ extension ByteBuffer {
 
     mutating func writeUserAuthPKOKMessage(_ message: SSHMessage.UserAuthPKOKMessage) -> Int {
         var writtenBytes = 0
-        writtenBytes += self.writeSSHString(message.key.keyPrefix)
+        writtenBytes += self.writeSSHString(message.publicKeyAlgorithm?.utf8 ?? message.key.keyPrefix)
         writtenBytes += self.writeCompositeSSHString { buffer in
             buffer.writeSSHHostKey(message.key)
         }

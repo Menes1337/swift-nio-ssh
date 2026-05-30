@@ -55,6 +55,21 @@ extension NIOSSHSignature {
 
     /// The prefix of a P521 ECDSA public key.
     fileprivate static let ecdsaP521SignaturePrefix = "ecdsa-sha2-nistp521".utf8
+
+    var signaturePrefix: String.UTF8View {
+        switch self.backingSignature {
+        case .ed25519:
+            return Self.ed25519SignaturePrefix
+        case .ecdsaP256:
+            return Self.ecdsaP256SignaturePrefix
+        case .ecdsaP384:
+            return Self.ecdsaP384SignaturePrefix
+        case .ecdsaP521:
+            return Self.ecdsaP521SignaturePrefix
+        case .custom(let signature):
+            return signature.signaturePrefix.utf8
+        }
+    }
 }
 
 extension NIOSSHSignature.BackingSignature.RawBytes: Equatable {

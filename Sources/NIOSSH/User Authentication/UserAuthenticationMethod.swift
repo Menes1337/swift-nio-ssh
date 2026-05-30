@@ -154,15 +154,18 @@ public extension NIOSSHUserAuthenticationOffer.Offer {
     struct PrivateKey {
         public var privateKey: NIOSSHPrivateKey
         public var publicKey: NIOSSHPublicKey
+        public var publicKeyAlgorithm: String?
 
-        public init(privateKey: NIOSSHPrivateKey) {
+        public init(privateKey: NIOSSHPrivateKey, publicKeyAlgorithm: String? = nil) {
             self.privateKey = privateKey
             self.publicKey = privateKey.publicKey
+            self.publicKeyAlgorithm = publicKeyAlgorithm
         }
 
-        public init(privateKey: NIOSSHPrivateKey, certifiedKey: NIOSSHCertifiedPublicKey) {
+        public init(privateKey: NIOSSHPrivateKey, certifiedKey: NIOSSHCertifiedPublicKey, publicKeyAlgorithm: String? = nil) {
             self.privateKey = privateKey
             self.publicKey = NIOSSHPublicKey(certifiedKey)
+            self.publicKeyAlgorithm = publicKeyAlgorithm
         }
     }
 
@@ -189,13 +192,19 @@ extension SSHMessage.UserAuthRequestMessage {
 
         switch request.offer {
         case .privateKey(let privateKeyRequest):
+            let publicKeyAlgorithm = privateKeyRequest.publicKeyAlgorithm?.utf8 ?? privateKeyRequest.publicKey.keyPrefix
             let dataToSign = UserAuthSignablePayload(
                 sessionIdentifier: sessionID,
                 userName: self.username,
                 serviceName: self.service,
-                publicKey: privateKeyRequest.publicKey
+                publicKey: privateKeyRequest.publicKey,
+                publicKeyAlgorithm: publicKeyAlgorithm
             )
-            let signature = try privateKeyRequest.privateKey.sign(dataToSign)
+            let signature = try privateKeyRequest.privateKey.sign(
+                dataToSign,
+                publicKeyAlgorithm: privateKeyRequest.publicKeyAlgorithm
+            )
+            self.publicKeyAlgorithm = privateKeyRequest.publicKeyAlgorithm
             self.method = .publicKey(.known(key: privateKeyRequest.publicKey, signature: signature))
         case .password(let passwordRequest):
             self.method = .password(passwordRequest.password)
