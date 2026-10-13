@@ -562,6 +562,7 @@ struct SSHKeyExchangeStateMachine {
         switch self.role {
         case .client:
             return Self.supportedServerHostKeyAlgorithms
+                + NIOSSHAlgorithms.publicKeys.map { Substring($0.publicKeyPrefix) }
         case .server(let configuration):
             return configuration.hostKeys.flatMap { $0.hostKeyAlgorithms }
         }

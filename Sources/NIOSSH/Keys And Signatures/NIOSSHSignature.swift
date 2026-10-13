@@ -42,6 +42,8 @@ extension NIOSSHSignature {
 
         case ecdsaP521(P521.Signing.ECDSASignature)
 
+        case custom(any NIOSSHSignatureProtocol)
+
         internal enum RawBytes {
             case byteBuffer(ByteBuffer)
             case data(Data)
@@ -93,10 +95,13 @@ extension NIOSSHSignature.BackingSignature: Equatable {
             return lhs.rawRepresentation == rhs.rawRepresentation
         case (.ecdsaP521(let lhs), .ecdsaP521(let rhs)):
             return lhs.rawRepresentation == rhs.rawRepresentation
+        case (.custom(let lhs), .custom(let rhs)):
+            return lhs.signaturePrefix == rhs.signaturePrefix && lhs.rawRepresentation == rhs.rawRepresentation
         case (.ed25519, _),
             (.ecdsaP256, _),
             (.ecdsaP384, _),
-            (.ecdsaP521, _):
+            (.ecdsaP521, _),
+            (.custom, _):
             return false
         }
     }
@@ -117,6 +122,10 @@ extension NIOSSHSignature.BackingSignature: Hashable {
         case .ecdsaP521(let sig):
             hasher.combine(3)
             hasher.combine(sig.rawRepresentation)
+        case .custom(let sig):
+            hasher.combine(4)
+            hasher.combine(sig.signaturePrefix)
+            hasher.combine(sig.rawRepresentation)
         }
     }
 }
@@ -134,6 +143,10 @@ extension ByteBuffer {
             return self.writeECDSAP384Signature(baseSignature: sig)
         case .ecdsaP521(let sig):
             return self.writeECDSAP521Signature(baseSignature: sig)
+        case .custom(let sig):
+            var writtenBytes = self.writeSSHString(sig.signaturePrefix.utf8)
+            writtenBytes += sig.write(to: &self)
+            return writtenBytes
         }
     }
 
@@ -229,6 +242,10 @@ extension ByteBuffer {
                 return try buffer.readECDSAP384Signature()
             } else if bytesView.elementsEqual(NIOSSHSignature.ecdsaP521SignaturePrefix) {
                 return try buffer.readECDSAP521Signature()
+            } else if let type = NIOSSHAlgorithms.signatures.first(where: {
+                bytesView.elementsEqual($0.signaturePrefix.utf8)
+            }) {
+                return NIOSSHSignature(backingSignature: .custom(try type.read(from: &buffer)))
             } else {
                 // We don't know this signature type.
                 let signature =

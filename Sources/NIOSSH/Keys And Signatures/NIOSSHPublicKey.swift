@@ -94,12 +94,17 @@ extension NIOSSHPublicKey {
             return digest.withUnsafeBytes { digestPtr in
                 key.isValidSignature(sig, for: digestPtr)
             }
+        case (.custom(let key), .custom(let sig)):
+            return digest.withUnsafeBytes { digestPtr in
+                key.isValidSignature(sig, for: digestPtr)
+            }
         case (.certified(let key), _):
             return key.isValidSignature(signature, for: digest)
         case (.ed25519, _),
             (.ecdsaP256, _),
             (.ecdsaP384, _),
-            (.ecdsaP521, _):
+            (.ecdsaP521, _),
+            (.custom, _):
             return false
         }
     }
@@ -116,12 +121,15 @@ extension NIOSSHPublicKey {
             return key.isValidSignature(sig, for: bytes.readableBytesView)
         case (.ecdsaP521(let key), .ecdsaP521(let sig)):
             return key.isValidSignature(sig, for: bytes.readableBytesView)
+        case (.custom(let key), .custom(let sig)):
+            return key.isValidSignature(sig, for: bytes.readableBytesView)
         case (.certified(let key), _):
             return key.isValidSignature(signature, for: bytes)
         case (.ed25519, _),
             (.ecdsaP256, _),
             (.ecdsaP384, _),
-            (.ecdsaP521, _):
+            (.ecdsaP521, _),
+            (.custom, _):
             return false
         }
     }
@@ -138,12 +146,15 @@ extension NIOSSHPublicKey {
             return key.isValidSignature(sig, for: payload.bytes.readableBytesView)
         case (.ecdsaP521(let key), .ecdsaP521(let sig)):
             return key.isValidSignature(sig, for: payload.bytes.readableBytesView)
+        case (.custom(let key), .custom(let sig)):
+            return key.isValidSignature(sig, for: payload.bytes.readableBytesView)
         case (.certified(let key), _):
             return key.isValidSignature(signature, for: payload)
         case (.ed25519, _),
             (.ecdsaP256, _),
             (.ecdsaP384, _),
-            (.ecdsaP521, _):
+            (.ecdsaP521, _),
+            (.custom, _):
             return false
         }
     }
@@ -157,6 +168,7 @@ extension NIOSSHPublicKey {
         case ecdsaP256(P256.Signing.PublicKey)
         case ecdsaP384(P384.Signing.PublicKey)
         case ecdsaP521(P521.Signing.PublicKey)
+        case custom(any NIOSSHPublicKeyProtocol)
         case certified(NIOSSHCertifiedPublicKey)  // This case recursively contains `NIOSSHPublicKey`.
     }
 
@@ -182,6 +194,8 @@ extension NIOSSHPublicKey {
             return Self.ecdsaP384PublicKeyPrefix
         case .ecdsaP521:
             return Self.ecdsaP521PublicKeyPrefix
+        case .custom(let key):
+            return key.publicKeyPrefix.utf8
         case .certified(let base):
             return base.keyPrefix
         }
@@ -191,7 +205,7 @@ extension NIOSSHPublicKey {
         [
             Self.ed25519PublicKeyPrefix, Self.ecdsaP384PublicKeyPrefix, Self.ecdsaP256PublicKeyPrefix,
             Self.ecdsaP521PublicKeyPrefix,
-        ]
+        ] + NIOSSHAlgorithms.publicKeys.map { $0.publicKeyPrefix.utf8 }
     }
 }
 
@@ -207,12 +221,15 @@ extension NIOSSHPublicKey.BackingKey: Equatable {
             return lhs.rawRepresentation == rhs.rawRepresentation
         case (.ecdsaP521(let lhs), .ecdsaP521(let rhs)):
             return lhs.rawRepresentation == rhs.rawRepresentation
+        case (.custom(let lhs), .custom(let rhs)):
+            return lhs.publicKeyPrefix == rhs.publicKeyPrefix && lhs.rawRepresentation == rhs.rawRepresentation
         case (.certified(let lhs), .certified(let rhs)):
             return lhs == rhs
         case (.ed25519, _),
             (.ecdsaP256, _),
             (.ecdsaP384, _),
             (.ecdsaP521, _),
+            (.custom, _),
             (.certified, _):
             return false
         }
@@ -237,6 +254,10 @@ extension NIOSSHPublicKey.BackingKey: Hashable {
         case .certified(let pkey):
             hasher.combine(5)
             hasher.combine(pkey)
+        case .custom(let pkey):
+            hasher.combine(6)
+            hasher.combine(pkey.publicKeyPrefix)
+            hasher.combine(pkey.rawRepresentation)
         }
     }
 }
@@ -260,6 +281,9 @@ extension ByteBuffer {
         case .ecdsaP521(let key):
             writtenBytes += self.writeSSHString(NIOSSHPublicKey.ecdsaP521PublicKeyPrefix)
             writtenBytes += self.writeECDSAP521PublicKey(baseKey: key)
+        case .custom(let key):
+            writtenBytes += self.writeSSHString(key.publicKeyPrefix.utf8)
+            writtenBytes += key.write(to: &self)
         case .certified(let key):
             return self.writeCertifiedKey(key)
         }
@@ -281,6 +305,8 @@ extension ByteBuffer {
             return self.writeECDSAP384PublicKey(baseKey: key)
         case .ecdsaP521(let key):
             return self.writeECDSAP521PublicKey(baseKey: key)
+        case .custom(let key):
+            return key.write(to: &self)
         case .certified:
             preconditionFailure("Certified keys are the only callers of this method, and cannot contain themselves")
         }
@@ -310,6 +336,10 @@ extension ByteBuffer {
                 return try buffer.readECDSAP384PublicKey()
             } else if keyIdentifierBytes.elementsEqual(NIOSSHPublicKey.ecdsaP521PublicKeyPrefix) {
                 return try buffer.readECDSAP521PublicKey()
+            } else if let type = NIOSSHAlgorithms.publicKeys.first(where: {
+                keyIdentifierBytes.elementsEqual($0.publicKeyPrefix.utf8)
+            }) {
+                return NIOSSHPublicKey(backingKey: .custom(try type.read(from: &buffer)))
             } else {
                 // We don't know this public key type. Maybe the certified keys do.
                 return try buffer.readCertifiedKeyWithoutKeyPrefix(keyIdentifierBytes).map(NIOSSHPublicKey.init)

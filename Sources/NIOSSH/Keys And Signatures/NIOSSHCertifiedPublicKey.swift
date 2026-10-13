@@ -359,6 +359,9 @@ extension NIOSSHCertifiedPublicKey {
             return Self.p384KeyPrefix
         case .ecdsaP521:
             return Self.p521KeyPrefix
+        case .custom(let key):
+            // NIOSSH has no certificate algorithm name for a custom key type, so it uses the key type's own name.
+            return key.publicKeyPrefix.utf8
         case .certified:
             preconditionFailure("base key cannot be certified")
         }
