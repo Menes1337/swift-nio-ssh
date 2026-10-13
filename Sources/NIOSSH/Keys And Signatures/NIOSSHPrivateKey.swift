@@ -141,7 +141,14 @@ extension NIOSSHPrivateKey {
         }
     }
 
-    func sign(_ payload: UserAuthSignablePayload) throws -> NIOSSHSignature {
+    /// Signs a user authentication payload.
+    ///
+    /// - parameters:
+    ///     - payload: The payload to sign.
+    ///     - algorithm: The public key algorithm the key is offered as, when it is not the key type, such as
+    ///         `rsa-sha2-512` for an `ssh-rsa` key. Only a custom key conforming to
+    ///         ``NIOSSHAlgorithmSpecificPrivateKeyProtocol`` signs with it; other keys sign as their key type.
+    func sign(_ payload: UserAuthSignablePayload, algorithm: String? = nil) throws -> NIOSSHSignature {
         switch self.backingKey {
         case .ed25519(let key):
             let signature = try key.signature(for: payload.bytes.readableBytesView)
@@ -156,7 +163,12 @@ extension NIOSSHPrivateKey {
             let signature = try key.signature(for: payload.bytes.readableBytesView)
             return NIOSSHSignature(backingSignature: .ecdsaP521(signature))
         case .custom(let key):
-            let signature = try key.signature(for: payload.bytes.readableBytesView)
+            let signature: any NIOSSHSignatureProtocol
+            if let algorithm, let key = key as? any NIOSSHAlgorithmSpecificPrivateKeyProtocol {
+                signature = try key.signature(for: payload.bytes.readableBytesView, algorithm: algorithm)
+            } else {
+                signature = try key.signature(for: payload.bytes.readableBytesView)
+            }
             return NIOSSHSignature(backingSignature: .custom(signature))
         #if canImport(Darwin)
         case .secureEnclaveP256(let key):

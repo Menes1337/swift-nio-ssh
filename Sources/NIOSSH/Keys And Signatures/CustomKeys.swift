@@ -84,6 +84,16 @@ public protocol NIOSSHPrivateKeyProtocol: Sendable {
     func signature<D: DataProtocol>(for data: D) throws -> any NIOSSHSignatureProtocol
 }
 
+/// A private key of a type implemented outside NIOSSH that can sign with more than one signature algorithm.
+///
+/// RFC 8332 lets an `ssh-rsa` key sign as `rsa-sha2-256` or `rsa-sha2-512`. When a user authentication offer names
+/// such an algorithm in ``NIOSSHUserAuthenticationOffer/Offer/PrivateKey/publicKeyAlgorithm``, NIOSSH signs the
+/// request with ``signature(for:algorithm:)``.
+public protocol NIOSSHAlgorithmSpecificPrivateKeyProtocol: NIOSSHPrivateKeyProtocol {
+    /// Signs `data` with the named signature algorithm, such as `rsa-sha2-512`.
+    func signature<D: DataProtocol>(for data: D, algorithm: String) throws -> any NIOSSHSignatureProtocol
+}
+
 extension NIOSSHSignatureProtocol {
     var signaturePrefix: String { Self.signaturePrefix }
 }

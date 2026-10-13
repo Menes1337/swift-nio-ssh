@@ -203,14 +203,28 @@ extension NIOSSHUserAuthenticationOffer.Offer {
         /// This is sent to the server.
         public var publicKey: NIOSSHPublicKey
 
-        public init(privateKey: NIOSSHPrivateKey) {
+        /// The public key algorithm to authenticate as, when it is not the key type.
+        ///
+        /// RFC 8332 lets an `ssh-rsa` key authenticate as `rsa-sha2-256` or `rsa-sha2-512`. NIOSSH names this
+        /// algorithm in the request and in the signed data, and signs with it when the private key is a custom key
+        /// conforming to ``NIOSSHAlgorithmSpecificPrivateKeyProtocol``. Other keys sign as their key type, so the
+        /// server rejects the request. When `nil`, the request names the key type.
+        public var publicKeyAlgorithm: String?
+
+        public init(privateKey: NIOSSHPrivateKey, publicKeyAlgorithm: String? = nil) {
             self.privateKey = privateKey
             self.publicKey = privateKey.publicKey
+            self.publicKeyAlgorithm = publicKeyAlgorithm
         }
 
-        public init(privateKey: NIOSSHPrivateKey, certifiedKey: NIOSSHCertifiedPublicKey) {
+        public init(
+            privateKey: NIOSSHPrivateKey,
+            certifiedKey: NIOSSHCertifiedPublicKey,
+            publicKeyAlgorithm: String? = nil
+        ) {
             self.privateKey = privateKey
             self.publicKey = NIOSSHPublicKey(certifiedKey)
+            self.publicKeyAlgorithm = publicKeyAlgorithm
         }
     }
 
@@ -246,9 +260,14 @@ extension SSHMessage.UserAuthRequestMessage {
                 sessionIdentifier: sessionID,
                 userName: self.username,
                 serviceName: self.service,
-                publicKey: privateKeyRequest.publicKey
+                publicKey: privateKeyRequest.publicKey,
+                publicKeyAlgorithm: privateKeyRequest.publicKeyAlgorithm
             )
-            let signature = try privateKeyRequest.privateKey.sign(dataToSign)
+            let signature = try privateKeyRequest.privateKey.sign(
+                dataToSign,
+                algorithm: privateKeyRequest.publicKeyAlgorithm
+            )
+            self.publicKeyAlgorithm = privateKeyRequest.publicKeyAlgorithm
             self.method = .publicKey(.known(key: privateKeyRequest.publicKey, signature: signature))
         case .password(let passwordRequest):
             self.method = .password(passwordRequest.password)

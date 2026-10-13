@@ -28,7 +28,7 @@ private struct TestPublicKey: NIOSSHPublicKeyProtocol {
     var rawRepresentation: Data { self.key.rawRepresentation }
 
     func isValidSignature<D: DataProtocol>(_ signature: any NIOSSHSignatureProtocol, for data: D) -> Bool {
-        guard let signature = signature as? TestSignature else {
+        guard signature is TestSignature || signature is TestAlternateSignature else {
             return false
         }
         return self.key.isValidSignature(signature.rawRepresentation, for: Data(data))
@@ -63,7 +63,25 @@ private struct TestSignature: NIOSSHSignatureProtocol {
     }
 }
 
-private struct TestPrivateKey: NIOSSHPrivateKeyProtocol {
+/// A second signature algorithm for the same key type, as RFC 8332 adds `rsa-sha2-512` for `ssh-rsa` keys.
+private struct TestAlternateSignature: NIOSSHSignatureProtocol {
+    static let signaturePrefix = "test-alt-sig@example.com"
+
+    var rawRepresentation: Data
+
+    func write(to buffer: inout ByteBuffer) -> Int {
+        buffer.writeSSHString(self.rawRepresentation)
+    }
+
+    static func read(from buffer: inout ByteBuffer) throws -> TestAlternateSignature {
+        guard let bytes = buffer.readSSHString() else {
+            throw NIOSSHError.invalidSSHMessage(reason: "truncated test signature")
+        }
+        return TestAlternateSignature(rawRepresentation: Data(bytes.readableBytesView))
+    }
+}
+
+private struct TestPrivateKey: NIOSSHAlgorithmSpecificPrivateKeyProtocol {
     static let keyPrefix = "test-key@example.com"
 
     var key = Curve25519.Signing.PrivateKey()
@@ -72,6 +90,13 @@ private struct TestPrivateKey: NIOSSHPrivateKeyProtocol {
 
     func signature<D: DataProtocol>(for data: D) throws -> any NIOSSHSignatureProtocol {
         TestSignature(rawRepresentation: try self.key.signature(for: Data(data)))
+    }
+
+    func signature<D: DataProtocol>(for data: D, algorithm: String) throws -> any NIOSSHSignatureProtocol {
+        guard algorithm == TestAlternateSignature.signaturePrefix else {
+            throw NIOSSHError.invalidSSHMessage(reason: "unsupported test signature algorithm")
+        }
+        return TestAlternateSignature(rawRepresentation: try self.key.signature(for: Data(data)))
     }
 }
 
@@ -136,5 +161,56 @@ final class CustomKeyTests: XCTestCase {
         XCTAssertThrowsError(try channel.interactInMemory()) { error in
             XCTAssertEqual((error as? NIOSSHError)?.type, .keyExchangeNegotiationFailure)
         }
+    }
+
+    func testUserAuthRequestNamesAndSignsWithTheOfferedAlgorithm() throws {
+        NIOSSHAlgorithms.register(publicKey: TestPublicKey.self, signature: TestAlternateSignature.self)
+
+        let privateKey = NIOSSHPrivateKey(custom: TestPrivateKey())
+        let offer = NIOSSHUserAuthenticationOffer(
+            username: "user",
+            serviceName: "ssh-connection",
+            offer: .privateKey(
+                .init(privateKey: privateKey, publicKeyAlgorithm: TestAlternateSignature.signaturePrefix)
+            )
+        )
+        var sessionID = ByteBufferAllocator().buffer(capacity: 32)
+        sessionID.writeBytes(repeatElement(UInt8(7), count: 32))
+        let message = try SSHMessage.UserAuthRequestMessage(request: offer, sessionID: sessionID)
+        XCTAssertEqual(message.publicKeyAlgorithm, TestAlternateSignature.signaturePrefix)
+
+        // The request names the offered algorithm rather than the key type, and signs with it.
+        var buffer = ByteBufferAllocator().buffer(capacity: 512)
+        let written = buffer.writeUserAuthRequestMessage(message)
+        XCTAssertEqual(written, buffer.readableBytes)
+        XCTAssertEqual(buffer.readSSHStringAsString(), "user")
+        XCTAssertEqual(buffer.readSSHStringAsString(), "ssh-connection")
+        XCTAssertEqual(buffer.readSSHStringAsString(), "publickey")
+        XCTAssertEqual(buffer.readSSHBoolean(), true)
+        XCTAssertEqual(buffer.readSSHStringAsString(), TestAlternateSignature.signaturePrefix)
+        var keyBlob = try XCTUnwrap(buffer.readSSHString())
+        XCTAssertEqual(try keyBlob.readSSHHostKey(), privateKey.publicKey)
+        var signatureBlob = try XCTUnwrap(buffer.readSSHString())
+        XCTAssertEqual(buffer.readableBytes, 0)
+        var signatureAlgorithm = signatureBlob
+        XCTAssertEqual(signatureAlgorithm.readSSHStringAsString(), TestAlternateSignature.signaturePrefix)
+        let signature = try XCTUnwrap(try signatureBlob.readSSHSignature())
+
+        // The signed data names the offered algorithm too.
+        let signedPayload = UserAuthSignablePayload(
+            sessionIdentifier: sessionID,
+            userName: "user",
+            serviceName: "ssh-connection",
+            publicKey: privateKey.publicKey,
+            publicKeyAlgorithm: TestAlternateSignature.signaturePrefix
+        )
+        XCTAssertTrue(privateKey.publicKey.isValidSignature(signature, for: signedPayload))
+        let keyTypePayload = UserAuthSignablePayload(
+            sessionIdentifier: sessionID,
+            userName: "user",
+            serviceName: "ssh-connection",
+            publicKey: privateKey.publicKey
+        )
+        XCTAssertFalse(privateKey.publicKey.isValidSignature(signature, for: keyTypePayload))
     }
 }

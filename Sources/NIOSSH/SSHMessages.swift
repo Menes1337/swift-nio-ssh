@@ -155,6 +155,9 @@ extension SSHMessage {
 
         var username: String
         var service: String
+        /// The public key algorithm a `publickey` request names, when it is not the key type, such as
+        /// `rsa-sha2-512` for an `ssh-rsa` key (RFC 8332). Only the client sets it.
+        var publicKeyAlgorithm: String? = nil
         var method: Method
     }
 
@@ -1373,7 +1376,7 @@ extension ByteBuffer {
         case .publicKey(.known(key: let key, signature: let signature)):
             writtenBytes += self.writeSSHString("publickey".utf8)
             writtenBytes += self.writeSSHBoolean(signature != nil)
-            writtenBytes += self.writeSSHString(key.keyPrefix)
+            writtenBytes += self.writeSSHString(message.publicKeyAlgorithm?.utf8 ?? key.keyPrefix)
             writtenBytes += self.writeCompositeSSHString { buffer in
                 buffer.writeSSHHostKey(key)
             }
