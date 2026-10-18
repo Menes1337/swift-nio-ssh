@@ -1276,6 +1276,54 @@ final class ChildChannelMultiplexerTests: XCTestCase {
         self.assertChannelClose(harness.flushedMessages.last, recipientChannel: 1)
     }
 
+    func testNoWindowAdjustAfterLocalClose() throws {
+        let harness = self.harnessForbiddingInboundChannels()
+        defer {
+            harness.finish()
+        }
+
+        var childChannel: Channel?
+        harness.multiplexer.createChildChannel(channelType: .session) { channel, _ in
+            childChannel = channel
+            return channel.setOption(ChannelOptions.autoRead, value: false)
+        }
+
+        guard let childChannel = childChannel else {
+            XCTFail("Did not create child channel")
+            return
+        }
+
+        // Activate channel.
+        let channelID = self.assertChannelOpen(harness.flushedMessages.first)
+        XCTAssertNoThrow(try harness.multiplexer.receiveMessage(self.openConfirmation(originalChannelID: channelID!, peerChannelID: 1)))
+        XCTAssertEqual(harness.flushedMessages.count, 1)
+
+        // The default window size is 1<<24 bytes. Sadly, we need a buffer that size.
+        let buffer = ByteBuffer.bigBuffer
+
+        // We close locally the channel.
+        childChannel.close(promise: nil)
+        XCTAssertEqual(harness.flushedMessages.count, 2)
+
+        // The peer keeps sending data that requires a window adjustment before it answers our CHANNEL_CLOSE.
+        XCTAssertNoThrow(try harness.multiplexer.receiveMessage(
+            self.data(
+                peerChannelID: channelID!,
+                data: buffer.getSlice(at: buffer.readerIndex, length: 1)!
+            )
+        ))
+        XCTAssertNoThrow(try harness.multiplexer.receiveMessage(
+            self.data(
+                peerChannelID: channelID!,
+                data: buffer.getSlice(at: buffer.readerIndex, length: 1 << 23)!
+            )
+        ))
+
+        // This must not trigger a window adjust (and must not crash).
+        childChannel.read()
+        XCTAssertEqual(harness.flushedMessages.count, 2)
+    }
+
     func testRespectingMaxMessageSize() throws {
         let harness = self.harnessForbiddingInboundChannels()
         defer {
